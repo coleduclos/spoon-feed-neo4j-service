@@ -1,0 +1,116 @@
+{
+    "Parameters" : {
+        "Owner" : {
+            "Type" : "String",
+            "Description" : "Enter the owner of the ECS service."
+        },
+        "AppName" : {
+            "Type" : "String",
+            "Description" : "Enter the name of the application this service belongs to."
+        },
+        "ServiceName" : {
+            "Type" : "String",
+            "Description" : "Enter the name of the service to be deployed via ECS."
+        },        
+        "ContainerImage" : {
+            "Type" : "String",
+            "Description" : "Enter the url for the container image to be spun up."
+        },
+        "ContainerCPU" : {
+            "Type" : "Number",
+            "Default" : "0",
+            "Description" : "Enter the minimum number of CPU units to reserve for the container."
+        },
+        "ContainerMemory" : {
+            "Type" : "Number",
+            "Default" : "128",
+            "Description" : "Enter the amount of memory (MB) to reserve for the container."
+        },
+        "TaskVolumeName" : {
+            "Type" : "String",
+            "Description" : "Enter the name of the host volume to be mounted."
+        },
+        "TaskVolumeHostSourcePath" : {
+            "Type" : "String",
+            "Description" : "Enter the source path of the host volume to be mounted."
+        },
+        "MountPointContainerPath" : {
+            "Type" : "String",
+            "Description" : "Enter the container path to be mounted to the volume."
+        },
+        "ServiceInitialDesiredCount" : {
+            "Type" : "Number",
+            "Default" : "0",
+            "Description" : "Enter the initial desired count of service instances running."
+        }
+    },
+    "Resources" : {
+        "ECSTaskRole" : {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument" : {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ecs-tasks.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "Path": { "Fn::Join" : [ "", [ "/", { "Ref" : "AppName" }, "/" ] ] },
+                "RoleName": { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "ecs-task-role" ] ] }
+          }
+        },
+        "ECSService" : {
+            "Type" : "AWS::ECS::Service",
+            "Properties" : {
+                "Cluster" : { "Fn::Join" : [ "", [ { "Ref" : "AppName" }, "-ecs-cluster" ] ] },
+                "DesiredCount" : { "Ref" : "ServiceInitialDesiredCount" },
+                "TaskDefinition" : { "Ref" : "ECSTaskDefinition" }
+            }
+        },
+        "ECSTaskDefinition" : {
+            "Type" : "AWS::ECS::TaskDefinition",
+            "Properties" : {
+                "Family" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" } ] ] },
+                "TaskRoleArn" : { "Fn::GetAtt" : [ "ECSTaskRole" , "Arn" ] },
+                "ContainerDefinitions" : [ 
+                    {
+                        "Name": { "Ref" : "AppName" },
+                        "MountPoints": [
+                            {
+                                "SourceVolume": { "Ref" : "TaskVolumeName" },
+                                "ContainerPath": { "Ref" : "MountPointContainerPath" }
+                            }
+                        ],
+                        "Image": { "Ref" : "ContainerImage" },
+                        "Cpu": { "Ref" : "ContainerCPU" },
+                        "MemoryReservation": { "Ref" : "ContainerMemory" },
+                        "PortMappings" : [
+                            {
+                                "ContainerPort" : 7474,
+                                "HostPort" : 7474,
+                                "Protocol" : "TCP"
+                            },
+                            {
+                                "ContainerPort" : 7687,
+                                "HostPort" : 7687,
+                                "Protocol" : "TCP"
+                            }
+                        ]
+                    }
+                ],
+                "Volumes": [
+                {
+                    "Host": {
+                        "SourcePath": { "Ref" : "TaskVolumeHostSourcePath" }
+                    },
+                    "Name": { "Ref" : "TaskVolumeName" }
+                }]
+            }
+        }
+    }
+}
