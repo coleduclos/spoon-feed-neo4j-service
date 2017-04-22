@@ -42,9 +42,110 @@
             "Type" : "Number",
             "Default" : "0",
             "Description" : "Enter the initial desired count of service instances running."
+        },
+        "VPC" : {
+            "Type" : "AWS::EC2::VPC::Id",
+            "Description" : "Select which VPC will host the cluster."
+        },
+        "Subnets" : {
+            "Type" : "List<AWS::EC2::Subnet::Id>",
+            "Description" : "Select the subnets to deploy to."
         }
     },
     "Resources" : {
+        "ELBSecurityGroup": {
+            "Type" : "AWS::EC2::SecurityGroup",
+            "Properties" : {
+                "VpcId" : { "Ref" : "VPC" },
+                "Tags" : [ 
+                    {
+                        "Key" : "Name",
+                        "Value" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "elb-sg" ] ] },
+                    },
+                    {
+                        "Key" : "Owner",
+                        "Value" : { "Ref" : "Owner" },
+                    } 
+                ],
+                "GroupDescription" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "elb-sg" ] ] },
+                "SecurityGroupIngress" : [ 
+                    {
+                        "IpProtocol" : "tcp",
+                        "FromPort" : "7474",
+                        "ToPort" : "7474",
+                        "CidrIp" : "10.0.0.0/16"
+                    },
+                    {
+                        "IpProtocol" : "tcp",
+                        "FromPort" : "7687",
+                        "ToPort" : "7687",
+                        "CidrIp" : "10.0.0.0/16"
+                    }  
+                ]
+            }
+        },
+        "ELB" : {
+            "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+            "Properties" : {    
+                "Name" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "elb" ] ] },
+                "Scheme" : "internal",
+                "SecurityGroups" : [ { "Ref" : "ELBSecurityGroup" } ],
+                "Subnets" : { "Ref" : "Subnets" },
+                "Tags" : [ 
+                    {
+                        "Key" : "Name",
+                        "Value" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "elb" ] ] },
+                    },
+                    {
+                        "Key" : "Owner",
+                        "Value" : { "Ref" : "Owner" },
+                    } 
+                ]
+            }
+        },
+        "ELBTargetGroup" : {
+            "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+            "Properties" : {
+                "HealthCheckIntervalSeconds" : 10,
+                "HealthCheckPath" : "/",
+                "HealthCheckPort" : "7474",
+                "HealthCheckProtocol" : "HTTP",
+                "HealthCheckTimeoutSeconds" : 5,
+                "HealthyThresholdCount" : 2,
+                "Matcher" : {
+                    "HttpCode" : "200"
+                },
+                "Name" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "elb-tg" ] ] },
+                "Port" : 7474,
+                "Protocol" : "HTTP",
+                "Tags" : [ 
+                    {
+                        "Key" : "Name",
+                        "Value" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "elb-tg" ] ] },
+                    },
+                    {
+                        "Key" : "Owner",
+                        "Value" : { "Ref" : "Owner" },
+                    } 
+                ],
+                "UnhealthyThresholdCount" : 2,
+                "VpcId" : { "Ref" : "VPC" }
+            }
+        },
+        "ELBListener" : {
+            "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+            "Properties" : {
+                "DefaultActions" : [ 
+                    {
+                      "TargetGroupArn" : { "Ref" : "ELBTargetGroup" },
+                      "Type" : "forward"
+                    }
+                ],
+                "LoadBalancerArn" : { "Ref" : "ELB" },
+                "Port" : "7474",
+                "Protocol" : "HTTP"
+            }
+        }, 
         "ECSTaskRole" : {
             "Type": "AWS::IAM::Role",
             "Properties": {
@@ -64,12 +165,40 @@
                 "RoleName": { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "ecs-task-role" ] ] }
           }
         },
+        "ECSServiceRole" : {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument" : {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "ecs.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [ "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole" ],
+                "Path": { "Fn::Join" : [ "", [ "/", { "Ref" : "AppName" }, "/" ] ] },
+                "RoleName": { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" }, "ecs-service-role" ] ] }
+          }
+        },
         "ECSService" : {
             "Type" : "AWS::ECS::Service",
             "Properties" : {
                 "Cluster" : { "Fn::Join" : [ "", [ { "Ref" : "AppName" }, "-ecs-cluster" ] ] },
                 "DesiredCount" : { "Ref" : "ServiceInitialDesiredCount" },
-                "TaskDefinition" : { "Ref" : "ECSTaskDefinition" }
+                "TaskDefinition" : { "Ref" : "ECSTaskDefinition" },
+                "Role" : { "Fn::GetAtt" : [ "ECSServiceRole" , "Arn" ] },
+                "LoadBalancers" : [ 
+                    {
+                        "ContainerName" : { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" } ] ] },
+                        "ContainerPort" : 7474,
+                        "TargetGroupArn" : { "Ref" : "ELBTargetGroup" }
+                    }
+                ]
             }
         },
         "ECSTaskDefinition" : {
@@ -79,7 +208,7 @@
                 "TaskRoleArn" : { "Fn::GetAtt" : [ "ECSTaskRole" , "Arn" ] },
                 "ContainerDefinitions" : [ 
                     {
-                        "Name": { "Ref" : "AppName" },
+                        "Name": { "Fn::Join" : [ "-", [ { "Ref" : "AppName" }, { "Ref" : "ServiceName" } ] ] },
                         "MountPoints": [
                             {
                                 "SourceVolume": { "Ref" : "TaskVolumeName" },
